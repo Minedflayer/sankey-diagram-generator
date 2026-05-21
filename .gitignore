@@ -1,0 +1,21 @@
+# Virtual environment dependencies folder
+venv/
+.venv/
+env/
+
+# Streamlit local secrets (contains private Groq API keys)
+.streamlit/secrets.toml
+
+# Python automatically generated compilation artifacts
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+
+# Financial documents and test inputs (prevents accidental data leaks)
+*.pdf
+*.txt
+
+# Operating system metadata files
+.DS_Store
+Thumbs.db
