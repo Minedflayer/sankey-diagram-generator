@@ -32,45 +32,73 @@ def clean_extracted_text(text: str) -> str:
 
 def extract_data(text: str, model_name: str, temperature: float) -> dict:
     """
-    Forces the LLM to extract data into a strict recursive tree structure,
-    making it bulletproof for ANY company's financial report.
+    Forces the LLM to extract data into a STRICT predefined accounting skeleton,
+    guaranteeing the standard financial waterfall (Revenue -> Gross Profit -> OpEx).
     """
     client = get_groq_client()
 
     system_prompt = """
     You are an expert forensic financial analyst. Extract data from the INCOME STATEMENT into a strict RECURSIVE JSON tree structure.
     
-    You MUST respond with a JSON object containing exactly TWO root trees: "revenues_tree" and "expenses_and_profits_tree".
+    To guarantee standard accounting logic, you MUST use this EXACT JSON skeleton. Do not change the core accounting hierarchy (Total Revenue -> Gross Profit -> Operating Income). 
+    You must fill in the values (using 0 if necessary, but replace with actual data), and populate the empty "breakdown" arrays with the granular line items from the document.
     
-    SCHEMA STRUCTURE:
-    Every node in the tree MUST have:
-    - "name": The string name of the line item.
-    - "value": The numerical value (NO commas or currency symbols).
-    - "breakdown": An array of sub-nodes (only if the item is broken down further).
+    REQUIRED JSON SKELETON:
+    {
+      "revenues_tree": {
+        "name": "Total Revenue",
+        "value": 0, 
+        "breakdown": [
+          // Extract and nest all specific granular revenue streams here
+        ]
+      },
+      "expenses_and_profits_tree": {
+        "name": "Total Revenue",
+        "value": 0, 
+        "breakdown": [
+          {
+            "name": "Cost of Revenues",
+            "value": 0, 
+            "breakdown": [
+              // Extract granular costs (e.g., Auto costs, Energy costs) here
+            ]
+          },
+          {
+            "name": "Gross Profit",
+            "value": 0, 
+            "breakdown": [
+              {
+                "name": "Operating Expenses",
+                "value": 0, 
+                "breakdown": [
+                  // Extract R&D, SG&A, etc. here
+                ]
+              },
+              {
+                "name": "Operating Income",
+                "value": 0, 
+                "breakdown": [
+                   // Extract Net Income, Taxes, Interest, and any other final expenses here
+                ]
+              }
+            ]
+          }
+        ]
+      }
+    }
 
-    CRITICAL REVENUE RULES:
-    - The root "name" of the revenues_tree MUST be exactly "Total Revenue".
-    - Populate its "breakdown" with the nested revenue streams.
-
-    CRITICAL EXPENSE & PROFIT RULES:
-    - The root "name" of the expenses_and_profits_tree MUST be exactly "Total Revenue".
-    - Populate its "breakdown" with the immediate splits (e.g., "Total Cost of Revenues" and "Gross Profit").
-    - Continue breaking those down (e.g., Gross Profit breaks down into "Operating Expenses" and "Operating Income").
-    - Operating Expenses breaks down into "R&D", "SG&A", etc.
-
-    NAMING RULE (PREVENT MERGING):
-    If a revenue line and a cost line share the exact same name, append the word "Revenue" or "Cost" to make them unique. 
-
-    BOUNDARIES:
-    - IGNORE Balance Sheets (Assets/Liabilities) and Cash Flows.
-    - Use EXACT numbers from the MOST RECENT quarter.
+    CRITICAL RULES:
+    1. Balance the Math: Total Revenue MUST roughly equal (Cost of Revenues + Gross Profit). Gross Profit MUST roughly equal (Operating Expenses + Operating Income). 
+    2. Absolute Values: Use positive numbers for all values, even expenses. No commas or currency symbols.
+    3. Unique Naming: If a granular revenue and cost share the same name (e.g., "Services"), append " Revenue" or " Cost" to make them unique.
+    4. Ignore Balance Sheets (Assets/Liabilities) and Cash Flows entirely.
     """
 
     try:
         response = client.chat.completions.create(
             messages=[
                 {"role": "system", "content": system_prompt},
-                {"role": "user", "content": f"Extract the recursive Income Statement hierarchy from this text:\n\n{text}"}
+                {"role": "user", "content": f"Extract the Income Statement hierarchy from this text using the strict accounting skeleton provided:\n\n{text}"}
             ],
             model=model_name,
             temperature=0.0, # Zero creativity, pure data extraction
@@ -85,20 +113,28 @@ def extract_data(text: str, model_name: str, temperature: float) -> dict:
 def generate_sankey_chart(sankey_data: dict):
     """
     Recursively parses the JSON tree to build perfect graph links,
+    uses hidden name-spacing to prevent node collision,
     calculates spatial tiers, and renders the center-origin diagram.
     """
     clean_links = []
 
-    # 1. Recursive Parsers
+    # 1. Recursive Parsers with Hidden Name-Spacing
     def parse_revenues(node):
         """Revenues flow IN to their parents (Child -> Parent)"""
         if "breakdown" in node and isinstance(node["breakdown"], list):
             for child in node["breakdown"]:
                 val = float(str(child.get("value", 0)).replace(",", "").replace("$", ""))
                 if val > 0:
+                    source_name = child["name"].strip()
+                    target_name = node["name"].strip()
+                    
+                    # Secretly tag left-side nodes to prevent merging
+                    if source_name.lower() != "total revenue": source_name += " [IN]"
+                    if target_name.lower() != "total revenue": target_name += " [IN]"
+
                     clean_links.append({
-                        "source": child["name"].strip(),
-                        "target": node["name"].strip(),
+                        "source": source_name,
+                        "target": target_name,
                         "value": val
                     })
                     parse_revenues(child)
@@ -109,9 +145,16 @@ def generate_sankey_chart(sankey_data: dict):
             for child in node["breakdown"]:
                 val = float(str(child.get("value", 0)).replace(",", "").replace("$", ""))
                 if val > 0:
+                    source_name = current_parent.strip()
+                    target_name = child["name"].strip()
+                    
+                    # Secretly tag right-side nodes to prevent merging
+                    if source_name.lower() != "total revenue": source_name += " [OUT]"
+                    if target_name.lower() != "total revenue": target_name += " [OUT]"
+
                     clean_links.append({
-                        "source": current_parent.strip(),
-                        "target": child["name"].strip(),
+                        "source": source_name,
+                        "target": target_name,
                         "value": val
                     })
                     parse_expenses(child, child["name"].strip())
@@ -129,7 +172,6 @@ def generate_sankey_chart(sankey_data: dict):
     # 2. Graph Traversal: Auto-assign Tiers based on distance from "Total Revenue"
     node_tiers = {"Total Revenue": 0}
     
-    # Positive Tiers (Flowing OUT)
     changed = True
     while changed:
         changed = False
@@ -138,7 +180,6 @@ def generate_sankey_chart(sankey_data: dict):
                 node_tiers[link["target"]] = node_tiers[link["source"]] + 1
                 changed = True
 
-    # Negative Tiers (Flowing IN)
     changed = True
     while changed:
         changed = False
@@ -147,12 +188,11 @@ def generate_sankey_chart(sankey_data: dict):
                 node_tiers[link["source"]] = node_tiers[link["target"]] - 1
                 changed = True
                 
-    # Fallback for disconnected nodes
     for link in clean_links:
         if link["source"] not in node_tiers: node_tiers[link["source"]] = -1
         if link["target"] not in node_tiers: node_tiers[link["target"]] = 1
 
-    # 3. Build Nodes and Values
+    # 3. Build Nodes and Calculate Values
     list_of_nodes = sorted(list(node_tiers.keys()))
     node_mapping = {name: idx for idx, name in enumerate(list_of_nodes)}
 
@@ -163,7 +203,12 @@ def generate_sankey_chart(sankey_data: dict):
         sum_in[link["target"]] += link["value"]
         
     node_values = {name: max(sum_in[name], sum_out[name]) for name in list_of_nodes}
-    formatted_labels = [f"{name}<br>${node_values[name]:,.0f}" for name in list_of_nodes]
+    
+    # Strip the hidden tags before displaying the text on the screen!
+    formatted_labels = []
+    for name in list_of_nodes:
+        display_name = name.replace(" [IN]", "").replace(" [OUT]", "")
+        formatted_labels.append(f"{display_name}<br>${node_values[name]:,.0f}")
 
     # 4. Dynamic Coordinate Calculation
     tiers = defaultdict(list)
@@ -193,17 +238,18 @@ def generate_sankey_chart(sankey_data: dict):
     # 5. Semantic Color Engine
     node_colors = []
     for name in list_of_nodes:
-        lower_name = name.lower()
+        # Strip tags so the color engine can read the pure words
+        clean_name = name.replace(" [IN]", "").replace(" [OUT]", "").lower()
         tier = node_tiers[name]
         
         if tier < 0:
-            node_colors.append("#808080") # Grey for revenues
+            node_colors.append("#808080") 
         elif tier == 0:
-            node_colors.append("#404040") # Dark Grey for Total Revenue Hub
-        elif any(k in lower_name for k in ["profit", "income", "net"]):
-            node_colors.append("#2ca02c") # Green
-        elif any(k in lower_name for k in ["cost", "expense", "tax", "r&d", "sg&a", "loss"]):
-            node_colors.append("#d62728") # Red
+            node_colors.append("#404040") 
+        elif any(k in clean_name for k in ["profit", "income", "net"]):
+            node_colors.append("#2ca02c") 
+        elif any(k in clean_name for k in ["cost", "expense", "tax", "r&d", "sg&a", "loss"]):
+            node_colors.append("#d62728") 
         else:
             node_colors.append("#a6a6a6")
 
@@ -216,10 +262,10 @@ def generate_sankey_chart(sankey_data: dict):
         if node_tiers[link["target"]] <= 0:
             link_colors.append("rgba(128, 128, 128, 0.3)")
         else:
-            target_name = link["target"].lower()
-            if any(k in target_name for k in ["profit", "income", "net"]):
+            clean_target = link["target"].replace(" [IN]", "").replace(" [OUT]", "").lower()
+            if any(k in clean_target for k in ["profit", "income", "net"]):
                 link_colors.append("rgba(44, 160, 44, 0.3)")
-            elif any(k in target_name for k in ["cost", "expense", "tax", "r&d", "sg&a"]):
+            elif any(k in clean_target for k in ["cost", "expense", "tax", "r&d", "sg&a"]):
                 link_colors.append("rgba(214, 39, 40, 0.3)")
             else:
                 link_colors.append("rgba(166, 166, 166, 0.3)")
@@ -228,8 +274,8 @@ def generate_sankey_chart(sankey_data: dict):
     fig = go.Figure(data=[go.Sankey(
         arrangement="freeform",
         node=dict(
-            pad=15,
-            thickness=30,  # Sleek, thin vertical nodes
+            pad=25,
+            thickness=5,
             line=dict(color="black", width=0.5),
             label=formatted_labels,
             color=node_colors,
@@ -248,7 +294,7 @@ def generate_sankey_chart(sankey_data: dict):
         title_text="Center-Origin Financial Flow Analysis", 
         font_size=12,
         height=700,
-        margin=dict(l=20, r=20, t=150, b=150) # Crushes the graph into the middle to create white space
+        margin=dict(l=20, r=20, t=150, b=150)
     )
     
     return fig
