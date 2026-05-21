@@ -15,8 +15,8 @@ def get_groq_client():
 
 def extract_data(text: str, model_name: str, temperature: float) -> dict:
     """
-    Instructs the LLM to extract financial data strictly from the Income Statement / 
-    Statement of Operations, ignoring balance sheets and cash flows.
+    Instructs the LLM to extract financial data strictly from the Income Statement, 
+    enforcing unique node naming and the Golden Accounting Equation.
     """
     client = get_groq_client()
 
@@ -25,35 +25,35 @@ def extract_data(text: str, model_name: str, temperature: float) -> dict:
     
     CRITICAL BOUNDARY RULES (WHAT TO IGNORE):
     1. ONLY extract revenues, costs of revenue, gross profit, operating expenses, and net income.
-    2. STRICTLY IGNORE Balance Sheet items (e.g., Total Assets, Liabilities, Equity, Inventory, Accounts Receivable/Payable, Retained Earnings).
-    3. STRICTLY IGNORE Cash Flow statement items (e.g., Operating Cash Flow, Free Cash Flow, Investing activities, Financing activities).
-    4. Do not include any of the ignored items in your output.
+    2. STRICTLY IGNORE Balance Sheet items and Cash Flow statement items.
+
+    CRITICAL NODE NAMING RULE (PREVENT MERGING):
+    If a revenue line and a cost line share the exact same name in the document (e.g., "Energy generation and storage"), you MUST append the word "Revenue" or "Cost" to distinguish them (e.g., "Energy generation and storage Revenue" and "Energy generation and storage Cost"). Node names MUST be unique!
     
     CRITICAL TIER RULES:
-    The central node representing the total incoming money (e.g., "Total Revenue", "Total Net Sales", "Total Revenues") is ALWAYS Tier 0.
+    The central node representing the total incoming money (e.g., "Total revenues") is ALWAYS Tier 0.
     
     LEFT SIDE (INCOMING REVENUES - Negative Tiers):
     - Lowest-level sub-categories -> Tier -2 or -3.
     - Mid-level aggregators -> Tier -1.
-    - If a revenue stream has no sub-categories, it goes straight to Tier -1.
     - JSON Direction MUST be: [Source: Sub-category -> Target: Aggregator or Tier 0].
     
     RIGHT SIDE (OUTGOING COSTS/PROFITS - Positive Tiers):
-    - Primary splits from Tier 0 (e.g., "Total Cost of Revenues", "Gross Profit", "Gross Margin") -> Tier 1.
-    - Secondary splits from Gross Profit (e.g., "Operating Expenses", "Operating Income") -> Tier 2.
-    - Breakdowns of Operating Expenses (e.g., "R&D", "SG&A") are Tier 3 (Source: Operating Expenses -> Target: R&D).
-    - Final bottom-line metrics (e.g., "Net Income", "Taxes", "Interest") -> Tier 3 or 4.
+    - THE GOLDEN RULE: Tier 0 ("Total revenues") MUST split into EXACTLY two Tier 1 nodes: "Total cost of revenues" and "Gross profit".
+    - "Total cost of revenues" (Tier 1) MUST split into its granular cost sub-categories (Tier 2). JSON Direction: [Source: "Total cost of revenues" -> Target: "Specific Cost"].
+    - "Gross profit" (Tier 1) MUST split into "Operating expenses" (Tier 2) and "Income from operations" (Tier 2).
+    - Breakdowns of "Operating expenses" (e.g., "R&D", "SG&A") are Tier 3.
+    - Final bottom-line metrics (e.g., "Net income", "Taxes") are Tier 3.
     - JSON Direction MUST be: [Source: Aggregator -> Target: Sub-category].
 
     EXHAUSTIVE BUT FOCUSED:
-    Extract every granular revenue stream and expense line item that is explicitly part of the INCOME STATEMENT. Balance the math as closely as the document allows using the MOST RECENT quarter's numbers. Do not use commas or currency symbols in the values.
+    Extract every granular revenue stream and expense line item that is explicitly part of the INCOME STATEMENT. Balance the math as closely as the document allows using the MOST RECENT quarter's numbers (Q1-2026). Do not use commas or currency symbols in the values.
     
     You MUST respond with a single, valid JSON object containing a "links" array matching this structure:
     {
       "links": [
         {"source": "Granular Revenue A", "source_tier": -2, "target": "Category Aggregator", "target_tier": -1, "value": 500},
-        {"source": "Category Aggregator", "source_tier": -1, "target": "Total Revenue", "target_tier": 0, "value": 500},
-        {"source": "Total Revenue", "source_tier": 0, "target": "Gross Profit", "target_tier": 1, "value": 200}
+        {"source": "Total revenues", "source_tier": 0, "target": "Total cost of revenues", "target_tier": 1, "value": 300}
       ]
     }
     """
@@ -62,11 +62,10 @@ def extract_data(text: str, model_name: str, temperature: float) -> dict:
         response = client.chat.completions.create(
             messages=[
                 {"role": "system", "content": system_prompt},
-                # We also reinforce the boundary in the user prompt
                 {"role": "user", "content": f"Extract the Income Statement financial flows from the most recent quarter in this text. STRICTLY IGNORE balance sheets and cash flows:\n\n{text}"}
             ],
             model=model_name,
-            temperature=0.0, # Keep at 0 for deterministic extraction
+            temperature=0.0,
             max_tokens=4096,
             response_format={"type": "json_object"}
         )
@@ -96,39 +95,119 @@ def clean_extracted_text(text: str) -> str:
     return text.strip()
 
 
+def extract_data(text: str, model_name: str, temperature: float) -> dict:
+    """
+    Forces the LLM to isolate incoming and outgoing funds into separate arrays, 
+    preventing cross-wiring hallucinations.
+    """
+    client = get_groq_client()
+
+    system_prompt = """
+    You are an expert forensic financial analyst. Extract data from the INCOME STATEMENT into a strict JSON format to build a Center-Origin Sankey diagram.
+    
+    CRITICAL RULE: The central anchor node MUST be named EXACTLY "Total Revenue".
+
+    You MUST respond with a JSON object containing TWO separate arrays: "revenue_streams" and "expenses_and_profits".
+
+    ARRAY 1: "revenue_streams" (Incoming Money)
+    - Map sub-revenues to category revenues, and category revenues to "Total Revenue".
+    - Target nodes in this array MUST eventually roll up to "Total Revenue".
+    - Example: {"source": "Auto Sales", "target": "Total Revenue", "value": 15473}
+    
+    ARRAY 2: "expenses_and_profits" (Outgoing Money)
+    - "Total Revenue" MUST be the source that splits into "Cost of Revenue" and "Gross Profit".
+    - "Cost of Revenue" splits into granular costs (e.g., {"source": "Cost of Revenue", "target": "Auto Costs", "value": 12812}).
+    - "Gross Profit" splits into "Operating Expenses" and "Operating Profit".
+    - "Operating Expenses" splits into R&D, SG&A, etc.
+    
+    STRICT BOUNDARIES:
+    - IGNORE Balance Sheets (Assets, Liabilities, Equity) and Cash Flows.
+    - NEVER link a specific revenue directly to a specific cost. Everything must pass through "Total Revenue".
+    - Use exact numerical values (no commas or currency symbols).
+    """
+
+    try:
+        response = client.chat.completions.create(
+            messages=[
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": f"Extract the Income Statement financial flows from this text. STRICTLY IGNORE balance sheets and cash flows:\n\n{text}"}
+            ],
+            model=model_name,
+            temperature=0.0,
+            max_tokens=4096,
+            response_format={"type": "json_object"}
+        )
+
+        return json.loads(response.choices[0].message.content.strip())
+    except Exception as e:
+        raise Exception(f"Extraction failed: {str(e)}")
+
 def generate_sankey_chart(sankey_data: dict):
     """
-    Builds a Sankey diagram using dynamic manual coordinate positioning to force a center-origin layout.
+    Uses a graph traversal algorithm to automatically anchor the network to 'Total Revenue'
+    and dynamically calculate spatial tiers.
     """
-    if "links" not in sankey_data:
-        raise Exception("Invalid JSON structure.")
+    # 1. Merge the isolated arrays into a single clean list
+    raw_links = sankey_data.get("revenue_streams", []) + sankey_data.get("expenses_and_profits", [])
+    
+    clean_links = []
+    for link in raw_links:
+        if not isinstance(link, dict): continue
+        source = str(link.get("source", "Unknown")).strip()
+        target = str(link.get("target", "Unknown")).strip()
+        
+        raw_val = str(link.get("value", 0)).replace(",", "").replace("$", "").replace(" ", "")
+        try:
+            value = float(raw_val)
+        except ValueError:
+            value = 0.0
+            
+        clean_links.append({"source": source, "target": target, "value": value})
 
-    # 1. Gather all unique nodes and their designated tiers
-    node_tiers = {}
-    for link in sankey_data["links"]:
-        node_tiers[link["source"]] = link.get("source_tier", 0)
-        node_tiers[link["target"]] = link.get("target_tier", 0)
+    # 2. Graph Traversal: Auto-assign Tiers based on distance from "Total Revenue"
+    node_tiers = {"Total Revenue": 0}
+    
+    # Calculate positive tiers (flowing OUT of Total Revenue)
+    changed = True
+    while changed:
+        changed = False
+        for link in clean_links:
+            if link["source"] in node_tiers and link["target"] not in node_tiers:
+                node_tiers[link["target"]] = node_tiers[link["source"]] + 1
+                changed = True
 
-    list_of_nodes = list(node_tiers.keys())
+    # Calculate negative tiers (flowing IN to Total Revenue)
+    changed = True
+    while changed:
+        changed = False
+        for link in clean_links:
+            if link["target"] in node_tiers and link["source"] not in node_tiers:
+                node_tiers[link["source"]] = node_tiers[link["target"]] - 1
+                changed = True
+                
+    # Fallback for disconnected hallucinated nodes
+    for link in clean_links:
+        if link["source"] not in node_tiers: node_tiers[link["source"]] = -1
+        if link["target"] not in node_tiers: node_tiers[link["target"]] = 1
+
+    # 3. Build Nodes and Values
+    list_of_nodes = sorted(list(node_tiers.keys()))
     node_mapping = {name: idx for idx, name in enumerate(list_of_nodes)}
 
-    # 2. Calculate values for labels
     sum_in = {name: 0 for name in list_of_nodes}
     sum_out = {name: 0 for name in list_of_nodes}
-    for link in sankey_data["links"]:
-        sum_out[link["source"]] += link.get("value", 0)
-        sum_in[link["target"]] += link.get("value", 0)
+    for link in clean_links:
+        sum_out[link["source"]] += link["value"]
+        sum_in[link["target"]] += link["value"]
         
     node_values = {name: max(sum_in[name], sum_out[name]) for name in list_of_nodes}
     formatted_labels = [f"{name}<br>${node_values[name]:,.0f}" for name in list_of_nodes]
 
-    # 3. Dynamic Coordinate Calculation (The Magic)
-    # Group nodes by their tier
+    # 4. Dynamic Coordinate Calculation
     tiers = defaultdict(list)
     for name, tier in node_tiers.items():
         tiers[tier].append(name)
         
-    # Find the min and max tiers to calculate horizontal spacing (X-axis)
     min_tier = min(tiers.keys())
     max_tier = max(tiers.keys())
     tier_range = max_tier - min_tier if max_tier != min_tier else 1
@@ -137,52 +216,43 @@ def generate_sankey_chart(sankey_data: dict):
     node_y = [0.0] * len(list_of_nodes)
     
     for tier, nodes_in_tier in tiers.items():
-        # Calculate X position based on tier level (scaled between 0.01 and 0.99)
-        # Shift tier so min_tier is at 0
         normalized_tier = tier - min_tier
         x_pos = 0.01 + (normalized_tier / tier_range) * 0.98
         
-        # Calculate Y positions to spread nodes evenly in their column
         num_nodes = len(nodes_in_tier)
         for i, name in enumerate(nodes_in_tier):
             idx = node_mapping[name]
             node_x[idx] = x_pos
-            # Spread Y evenly between 0.1 and 0.9
             if num_nodes == 1:
                 node_y[idx] = 0.5
             else:
                 node_y[idx] = 0.1 + (i / (num_nodes - 1)) * 0.8
 
-    # 4. Color Engine
+    # 5. Semantic Color Engine
     node_colors = []
     for name in list_of_nodes:
         lower_name = name.lower()
         tier = node_tiers[name]
         
         if tier < 0:
-            node_colors.append("#808080") # Dark Grey for incoming revenue
+            node_colors.append("#808080") # Grey for revenues
         elif tier == 0:
-            node_colors.append("#595959") # Darkest Grey for Center
-        elif any(keyword in lower_name for keyword in ["profit", "income", "net"]):
+            node_colors.append("#404040") # Dark Grey for Total Revenue Hub
+        elif any(k in lower_name for k in ["profit", "income", "net"]):
             node_colors.append("#2ca02c") # Green
-        elif any(keyword in lower_name for keyword in ["cost", "expense", "tax", "r&d", "sg&a", "loss"]):
+        elif any(k in lower_name for k in ["cost", "expense", "tax", "r&d", "sg&a", "loss"]):
             node_colors.append("#d62728") # Red
         else:
-            node_colors.append("#a6a6a6") # Fallback
+            node_colors.append("#a6a6a6")
 
-    sources = []
-    targets = []
-    values = []
-    link_colors = []
-
-    for link in sankey_data["links"]:
+    sources, targets, values, link_colors = [], [], [], []
+    for link in clean_links:
         sources.append(node_mapping[link["source"]])
         targets.append(node_mapping[link["target"]])
-        values.append(link.get("value", 0))
+        values.append(link["value"])
         
-        # Color links based on the Right-Side target, or Grey if it's a left-side flow
-        if link.get("target_tier", 0) <= 0:
-            link_colors.append("rgba(128, 128, 128, 0.3)") # Translucent Grey
+        if node_tiers[link["target"]] <= 0:
+            link_colors.append("rgba(128, 128, 128, 0.3)")
         else:
             target_name = link["target"].lower()
             if any(k in target_name for k in ["profit", "income", "net"]):
@@ -192,17 +262,17 @@ def generate_sankey_chart(sankey_data: dict):
             else:
                 link_colors.append("rgba(166, 166, 166, 0.3)")
 
-    # 5. Build Plotly Object with Explicit Coordinates
+    # 6. Build the Plotly Object
     fig = go.Figure(data=[go.Sankey(
-        arrangement="freeform", # Allows explicit coordinate mapping
+        arrangement="freeform",
         node=dict(
             pad=15,
             thickness=30,
-            line=dict(color="black", width=0.5),
+            line=dict(color="black", width=0.3),
             label=formatted_labels,
             color=node_colors,
-            x=node_x, # Inject our calculated X coordinates
-            y=node_y  # Inject our calculated Y coordinates
+            x=node_x,
+            y=node_y
         ),
         link=dict(
             source=sources,
@@ -215,8 +285,8 @@ def generate_sankey_chart(sankey_data: dict):
     fig.update_layout(
         title_text="Center-Origin Financial Flow Analysis", 
         font_size=12,
-        height=650,
-        margin=dict(l=20, r=20, t=50, b=20)
+        height=700,  # Keep the canvas itself tall
+        # Crank up the top (t) and bottom (b) margins to compress the chart!
+        margin=dict(l=20, r=20, t=150, b=150) 
     )
-    
     return fig
