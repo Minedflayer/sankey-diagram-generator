@@ -60,11 +60,9 @@ if uploaded_file is not None:
         else:
             # Handles standard text file format
             raw_text = uploaded_file.read().decode("utf-8")
-        # 2. Run cleaning rules
+        # Run cleaning rules
         cleaned_text = clean_extracted_text(raw_text)
         
-# app.py (Continued below the file metrics and expander layout)
-
     if cleaned_text:
         st.success(f"Successfully processed: {uploaded_file.name}")
         
