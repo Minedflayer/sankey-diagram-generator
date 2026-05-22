@@ -235,23 +235,22 @@ def generate_sankey_chart(sankey_data: dict):
             else:
                 node_y[idx] = 0.1 + (i / (num_nodes - 1)) * 0.8
 
-    # 5. Semantic Color Engine
+# 5. Semantic & Structural Color Engine
     node_colors = []
     for name in list_of_nodes:
-        # Strip tags so the color engine can read the pure words
         clean_name = name.replace(" [IN]", "").replace(" [OUT]", "").lower()
         tier = node_tiers[name]
         
         if tier < 0:
-            node_colors.append("#808080") 
+            node_colors.append("#808080") # Grey for incoming revenues
         elif tier == 0:
-            node_colors.append("#404040") 
-        elif any(k in clean_name for k in ["profit", "income", "net"]):
-            node_colors.append("#2ca02c") 
-        elif any(k in clean_name for k in ["cost", "expense", "tax", "r&d", "sg&a", "loss"]):
-            node_colors.append("#d62728") 
-        else:
-            node_colors.append("#a6a6a6")
+            node_colors.append("#404040") # Dark Grey for Total Revenue Hub
+        elif tier > 0:
+            # If it's on the right side, it's either a Profit or a Cost
+            if any(k in clean_name for k in ["profit", "income", "net", "margin"]):
+                node_colors.append("#2ca02c") # Green
+            else:
+                node_colors.append("#d62728") # Red for EVERYTHING else on the right
 
     sources, targets, values, link_colors = [], [], [], []
     for link in clean_links:
@@ -259,16 +258,16 @@ def generate_sankey_chart(sankey_data: dict):
         targets.append(node_mapping[link["target"]])
         values.append(link["value"])
         
-        if node_tiers[link["target"]] <= 0:
-            link_colors.append("rgba(128, 128, 128, 0.3)")
+        target_tier = node_tiers[link["target"]]
+        
+        if target_tier <= 0:
+            link_colors.append("rgba(128, 128, 128, 0.3)") # Translucent Grey
         else:
             clean_target = link["target"].replace(" [IN]", "").replace(" [OUT]", "").lower()
-            if any(k in clean_target for k in ["profit", "income", "net"]):
-                link_colors.append("rgba(44, 160, 44, 0.3)")
-            elif any(k in clean_target for k in ["cost", "expense", "tax", "r&d", "sg&a"]):
-                link_colors.append("rgba(214, 39, 40, 0.3)")
+            if any(k in clean_target for k in ["profit", "income", "net", "margin"]):
+                link_colors.append("rgba(44, 160, 44, 0.3)") # Translucent Green
             else:
-                link_colors.append("rgba(166, 166, 166, 0.3)")
+                link_colors.append("rgba(214, 39, 40, 0.3)") # Translucent Red for all costs
 
     # 6. Build the Plotly Object
     fig = go.Figure(data=[go.Sankey(
