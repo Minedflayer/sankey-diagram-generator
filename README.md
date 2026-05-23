@@ -3,6 +3,8 @@
   <p><em>Transform unstructured financial documents into interactive, structured flow diagrams using LLMs.</em></p>
 </div>
 
+[streamlit-app-2026-05-23-15-03-03.webm](https://github.com/user-attachments/assets/e6f46bd8-372b-4c4d-8a1f-592d23b7a416)
+
 An intelligent web application built with Streamlit that automates the extraction of complex financial hierarchies from raw PDFs (like Income Statements and 10-K reports). By leveraging the speed of the Groq API, it parses unstructured text into strict JSON schemas and renders them dynamically as interactive Plotly Sankey diagrams.
 
 ## Features
