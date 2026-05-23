@@ -34,24 +34,37 @@ Clone the repository and navigate into the project directory:
 git clone [https://github.com/your-username/sankey-diagram-generator.git](https://github.com/your-username/sankey-diagram-generator.git)
 cd sankey-diagram-generator
 
+```
+
+
 Create and activate a virtual environment:
 
+```bash
 python -m venv venv
 # On Windows:
 venv\Scripts\activate
 # On macOS/Linux:
 source venv/bin/activate
+```
 
 Install the required dependencies:
 
+```bash
 pip install -r requirements.txt
+
+```
 
 ### 2. Environment configuration
 
 Create a .env file in the root directory (or use Streamlit's .streamlit/secrets.toml locally) and add your API key:
 
+```bash
 GROQ_API_KEY="your_actual_api_key_here"
 
-### 3. Running the Application
+```
 
+### 3. Running the Application
+```bash
 streamlit run app.py
+
+```
