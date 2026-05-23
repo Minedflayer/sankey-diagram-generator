@@ -20,8 +20,7 @@ st.sidebar.header("Model configuration")
 
 model_options = [
     "llama-3.1-8b-instant",
-    "llama3-70b-8192",
-    "mixtral-8x7b-32768"
+    "openai/gpt-oss-20b"
 ]
 selected_model = st.sidebar.selectbox(
     "Select LLM Architecture",
@@ -29,18 +28,19 @@ selected_model = st.sidebar.selectbox(
     index=0
 )
 
-# Hyperparameters
-temperature = st.sidebar.slider (
-    "Temperature (Creativity)",
-    min_value=0.0,
-    max_value=1.0,
-    value=0.1,
-    step=0.05,
-    help="Lower values yield deterministic structural extraction."
-)
+
+
+# # Hyperparameters
+# temperature = st.sidebar.slider (
+#     "Temperature (Creativity)",
+#     min_value=0.0,
+#     max_value=1.0,
+#     value=0.1,
+#     step=0.05,
+#     help="Lower values yield deterministic structural extraction."
+# )
 
 st.sidebar.divider()
-st.sidebar.info("Phase 2 Environment Target: Active")
 
 # Main Content Area: Document Processing Core
 st.subheader("Data input")
@@ -60,9 +60,11 @@ if uploaded_file is not None:
         else:
             # Handles standard text file format
             raw_text = uploaded_file.read().decode("utf-8")
-        # Run cleaning rules
+        # 2. Run cleaning rules
         cleaned_text = clean_extracted_text(raw_text)
         
+# app.py (Continued below the file metrics and expander layout)
+
     if cleaned_text:
         st.success(f"Successfully processed: {uploaded_file.name}")
         
@@ -89,37 +91,32 @@ if uploaded_file is not None:
                     sankey_data = extract_data(
                         text=st.session_state['document_text'],
                         model_name=selected_model,
-                        temperature=temperature
+                       # temperature=temperature
                     )
                     
-                    # Store data safely for visualization
+                    # Store data safely for visualization in Phase 4
                     st.session_state['sankey_data'] = sankey_data
                     st.success("Successfully isolated financial flow layers!")
+
+           
+                    st.markdown("---")
+                    st.subheader("Interactive Visualization")
+                    
+                    # Generate and render the Plotly object
+                    fig = generate_sankey_chart(sankey_data)
+                    st.plotly_chart(fig, use_container_width=True)
+                    # -------------------------------
+                    
+                    with st.expander("View Raw Structural Blueprint JSON"):
+                        st.json(sankey_data)
+                    
                 except Exception as error:
-                    st.error("Execution pipeline stopped: {str(error)}")
-
-        if 'sankey_data' in st.session_state:
+                    st.error(f"Execution pipeline halted: {str(error)}")
                     
-            st.markdown("---")
-            st.subheader("Interactive Visualization")
-
-            try:
-                  
-                # Generate and render the Plotly object
-                fig = generate_sankey_chart(st.session_state['sankey_data'])
-                st.plotly_chart(fig, use_container_width=True)
-                # -------------------------------
-                    
-                with st.expander("View Raw Structural Blueprint JSON"):
-                        st.json(st.session_state['sankey_data'])
-                    
-            except Exception as error:
-                st.error(f"Visualization rendering failed: {str(error)}")
-                    
-        else:
-            st.info("👆 Upload a document and click **Generate Structured Flow Blueprint** to start the analysis.")
-# else:
-#     st.info("Awaiting file upload to initiate extraction pipeline.")  
+    else:
+        st.error("Document appears to be empty or unreadable.")
+else:
+    st.info("Awaiting file upload to initiate extraction pipeline.")  
 
 # Placeholder Execution Pipeline Verification
 if uploaded_file is not None:
