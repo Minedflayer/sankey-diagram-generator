@@ -1,27 +1,35 @@
 # utils.py
 import json
 import re
-import PyPDF2
 from groq import Groq
 import streamlit as st
+import fitz  # PyMuPDF
 import plotly.graph_objects as go
 from collections import defaultdict
+from prompt import INCOME_STATEMENT_EXTRACTION_PROMPT
 
+@st.cache_resource
 def get_groq_client():
     """ Initializes Groq client using streamlit native secrets. """
     return Groq(api_key=st.secrets["GROQ_API_KEY"])
 
 def extract_text_from_pdf(file_wrapper) -> str:
-    """ Extracts raw text from an uploaded PDF file object. """
-    reader = PyPDF2.PdfReader(file_wrapper)
+    """ Extracts raw text from an uploaded PDF file object using PyMuPDF. """
+    # Reset the stream position in case it was read elsewhere in the app
+    file_wrapper.seek(0)
+    file_bytes = file_wrapper.read()
+    
+    # Open the PDF from the memory buffer
+    doc = fitz.open(stream=file_bytes, filetype="pdf")
     extracted_text = []
 
-    for page_num in range(len(reader.pages)):
-        page = reader.pages[page_num]
-        page_text = page.extract_text()
+    for page in doc:
+        # get_text("text") attempts to preserve the visual layout of tables
+        page_text = page.get_text("text") 
         if page_text:
             extracted_text.append(page_text)
-    
+            
+    doc.close()
     return "\n".join(extracted_text)
 
 def clean_extracted_text(text: str) -> str:
@@ -33,71 +41,14 @@ def clean_extracted_text(text: str) -> str:
 def extract_data(text: str, model_name: str, temperature: float) -> dict:
     """
     Forces the LLM to extract data into a STRICT predefined accounting skeleton,
-    guaranteeing the standard financial waterfall (Revenue -> Gross Profit -> OpEx).
+    and explicitly forbids unit conversion to prevent zero-dropping hallucinations.
     """
     client = get_groq_client()
-
-    system_prompt = """
-    You are an expert forensic financial analyst. Extract data from the INCOME STATEMENT into a strict RECURSIVE JSON tree structure.
-    
-    To guarantee standard accounting logic, you MUST use this EXACT JSON skeleton. Do not change the core accounting hierarchy (Total Revenue -> Gross Profit -> Operating Income). 
-    You must fill in the values (using 0 if necessary, but replace with actual data), and populate the empty "breakdown" arrays with the granular line items from the document.
-    
-    REQUIRED JSON SKELETON:
-    {
-      "revenues_tree": {
-        "name": "Total Revenue",
-        "value": 0, 
-        "breakdown": [
-          // Extract and nest all specific granular revenue streams here
-        ]
-      },
-      "expenses_and_profits_tree": {
-        "name": "Total Revenue",
-        "value": 0, 
-        "breakdown": [
-          {
-            "name": "Cost of Revenues",
-            "value": 0, 
-            "breakdown": [
-              // Extract granular costs (e.g., Auto costs, Energy costs) here
-            ]
-          },
-          {
-            "name": "Gross Profit",
-            "value": 0, 
-            "breakdown": [
-              {
-                "name": "Operating Expenses",
-                "value": 0, 
-                "breakdown": [
-                  // Extract R&D, SG&A, etc. here
-                ]
-              },
-              {
-                "name": "Operating Income",
-                "value": 0, 
-                "breakdown": [
-                   // Extract Net Income, Taxes, Interest, and any other final expenses here
-                ]
-              }
-            ]
-          }
-        ]
-      }
-    }
-
-    CRITICAL RULES:
-    1. Balance the Math: Total Revenue MUST roughly equal (Cost of Revenues + Gross Profit). Gross Profit MUST roughly equal (Operating Expenses + Operating Income). 
-    2. Absolute Values: Use positive numbers for all values, even expenses. No commas or currency symbols.
-    3. Unique Naming: If a granular revenue and cost share the same name (e.g., "Services"), append " Revenue" or " Cost" to make them unique.
-    4. Ignore Balance Sheets (Assets/Liabilities) and Cash Flows entirely.
-    """
 
     try:
         response = client.chat.completions.create(
             messages=[
-                {"role": "system", "content": system_prompt},
+                {"role": "system", "content": INCOME_STATEMENT_EXTRACTION_PROMPT},
                 {"role": "user", "content": f"Extract the Income Statement hierarchy from this text using the strict accounting skeleton provided:\n\n{text}"}
             ],
             model=model_name,
@@ -106,19 +57,26 @@ def extract_data(text: str, model_name: str, temperature: float) -> dict:
             response_format={"type": "json_object"}
         )
 
-        return json.loads(response.choices[0].message.content.strip())
+        raw_content = response.choices[0].message.content.strip()
+        cleaned_content = re.sub(r"```(?:json)?|```", "", raw_content).strip()
+
+        return json.loads(cleaned_content)
     except Exception as e:
         raise Exception(f"Extraction failed: {str(e)}")
+    
+    # --- Rendering Helper Functions --
 
-def generate_sankey_chart(sankey_data: dict):
+def _clean_financial_value(val) -> float:
+    """Standardizes numeric extraction logic."""
+    return float(str(val).replace(",", "").replace("$", ""))
+
+def _parse_json_to_edges(sankey_data: dict) -> list:
     """
     Recursively parses the JSON tree to build perfect graph links,
     uses hidden name-spacing to prevent node collision,
     calculates spatial tiers, and renders the center-origin diagram.
     """
     clean_links = []
-
-    # 1. Recursive Parsers with Hidden Name-Spacing
     def parse_revenues(node):
         """Revenues flow IN to their parents (Child -> Parent)"""
         if "breakdown" in node and isinstance(node["breakdown"], list):
@@ -138,28 +96,23 @@ def generate_sankey_chart(sankey_data: dict):
                         "value": val
                     })
                     parse_revenues(child)
+    
 
+    
     def parse_expenses(node, current_parent):
-        """Expenses and Profits flow OUT of their parents (Parent -> Child)"""
         if "breakdown" in node and isinstance(node["breakdown"], list):
             for child in node["breakdown"]:
-                val = float(str(child.get("value", 0)).replace(",", "").replace("$", ""))
+                val = _clean_financial_value(child.get("value", 0))
                 if val > 0:
                     source_name = current_parent.strip()
                     target_name = child["name"].strip()
                     
-                    # Secretly tag right-side nodes to prevent merging
                     if source_name.lower() != "total revenue": source_name += " [OUT]"
                     if target_name.lower() != "total revenue": target_name += " [OUT]"
 
-                    clean_links.append({
-                        "source": source_name,
-                        "target": target_name,
-                        "value": val
-                    })
+                    clean_links.append({"source": source_name, "target": target_name, "value": val})
                     parse_expenses(child, child["name"].strip())
-
-    # Safely execute the parsing
+    
     if "revenues_tree" in sankey_data:
         parse_revenues(sankey_data["revenues_tree"])
         
@@ -168,34 +121,48 @@ def generate_sankey_chart(sankey_data: dict):
 
     if not clean_links:
         raise Exception("The AI failed to extract valid links. Please try again.")
+        
+    return clean_links
 
-    # 2. Graph Traversal: Auto-assign Tiers based on distance from "Total Revenue"
+def _compute_node_tiers(clean_links: list) -> dict:
+    """Traverses the graph to assign spatial tiers based on distance from Total Revenue."""
     node_tiers = {"Total Revenue": 0}
+    max_iterations = len(clean_links) * 2 # Prevent infinite loops from LLM hallucinations
     
+    # Calculate downstream tiers
     changed = True
-    while changed:
+    iteration = 0
+    while changed and iteration < max_iterations:
         changed = False
         for link in clean_links:
             if link["source"] in node_tiers and link["target"] not in node_tiers:
                 node_tiers[link["target"]] = node_tiers[link["source"]] + 1
                 changed = True
+        iteration += 1
 
+    # Calculate upstream tiers
     changed = True
-    while changed:
+    iteration = 0
+    while changed and iteration < max_iterations:
         changed = False
         for link in clean_links:
             if link["target"] in node_tiers and link["source"] not in node_tiers:
                 node_tiers[link["source"]] = node_tiers[link["target"]] - 1
                 changed = True
-                
+        iteration += 1
+        
+    # Catch any disconnected components
     for link in clean_links:
         if link["source"] not in node_tiers: node_tiers[link["source"]] = -1
         if link["target"] not in node_tiers: node_tiers[link["target"]] = 1
-
-    # 3. Build Nodes and Calculate Values
+        
+    return node_tiers
+def _build_sankey_figure(clean_links: list, node_tiers: dict) -> go.Figure:
+    """Handles the aesthetic calculation and Plotly object generation."""
     list_of_nodes = sorted(list(node_tiers.keys()))
     node_mapping = {name: idx for idx, name in enumerate(list_of_nodes)}
 
+    # Calculate Values
     sum_in = {name: 0 for name in list_of_nodes}
     sum_out = {name: 0 for name in list_of_nodes}
     for link in clean_links:
@@ -204,13 +171,13 @@ def generate_sankey_chart(sankey_data: dict):
         
     node_values = {name: max(sum_in[name], sum_out[name]) for name in list_of_nodes}
     
-    # Strip the hidden tags before displaying the text on the screen!
+    # Format Labels
     formatted_labels = []
     for name in list_of_nodes:
         display_name = name.replace(" [IN]", "").replace(" [OUT]", "")
-        formatted_labels.append(f"{display_name}<br>${node_values[name]:,.0f}")
+        formatted_labels.append(f"{display_name}<br>${node_values[name]:,.0f}M")
 
-    # 4. Dynamic Coordinate Calculation
+    # Dynamic Coordinate Calculation
     tiers = defaultdict(list)
     for name, tier in node_tiers.items():
         tiers[tier].append(name)
@@ -235,23 +202,23 @@ def generate_sankey_chart(sankey_data: dict):
             else:
                 node_y[idx] = 0.1 + (i / (num_nodes - 1)) * 0.8
 
-# 5. Semantic & Structural Color Engine
+    # Semantic & Structural Color Engine
     node_colors = []
     for name in list_of_nodes:
         clean_name = name.replace(" [IN]", "").replace(" [OUT]", "").lower()
         tier = node_tiers[name]
         
         if tier < 0:
-            node_colors.append("#808080") # Grey for incoming revenues
+            node_colors.append("#808080")
         elif tier == 0:
-            node_colors.append("#404040") # Dark Grey for Total Revenue Hub
+            node_colors.append("#404040")
         elif tier > 0:
-            # If it's on the right side, it's either a Profit or a Cost
             if any(k in clean_name for k in ["profit", "income", "net", "margin"]):
-                node_colors.append("#2ca02c") # Green
+                node_colors.append("#2ca02c")
             else:
-                node_colors.append("#d62728") # Red for EVERYTHING else on the right
+                node_colors.append("#d62728")
 
+    # Mapping sources and targets
     sources, targets, values, link_colors = [], [], [], []
     for link in clean_links:
         sources.append(node_mapping[link["source"]])
@@ -261,25 +228,26 @@ def generate_sankey_chart(sankey_data: dict):
         target_tier = node_tiers[link["target"]]
         
         if target_tier <= 0:
-            link_colors.append("rgba(128, 128, 128, 0.3)") # Translucent Grey
+            link_colors.append("rgba(128, 128, 128, 0.3)")
         else:
             clean_target = link["target"].replace(" [IN]", "").replace(" [OUT]", "").lower()
             if any(k in clean_target for k in ["profit", "income", "net", "margin"]):
-                link_colors.append("rgba(44, 160, 44, 0.3)") # Translucent Green
+                link_colors.append("rgba(44, 160, 44, 0.3)")
             else:
-                link_colors.append("rgba(214, 39, 40, 0.3)") # Translucent Red for all costs
+                link_colors.append("rgba(214, 39, 40, 0.3)")
 
-    # 6. Build the Plotly Object
+    # Build the Plotly Object
     fig = go.Figure(data=[go.Sankey(
         arrangement="freeform",
+        textfont=dict(color="black", size=12),
         node=dict(
             pad=25,
-            thickness=5,
+            thickness=10,
             line=dict(color="black", width=0.5),
             label=formatted_labels,
             color=node_colors,
             x=node_x,
-            y=node_y
+            y=node_y,
         ),
         link=dict(
             source=sources,
@@ -297,3 +265,9 @@ def generate_sankey_chart(sankey_data: dict):
     )
     
     return fig
+
+def generate_sankey_chart(sankey_data: dict) -> go.Figure:
+    """Orchestrates the creation of the Sankey diagram by calling dedicated helper functions."""
+    edges = _parse_json_to_edges(sankey_data)
+    tiers = _compute_node_tiers(edges)
+    return _build_sankey_figure(edges, tiers)

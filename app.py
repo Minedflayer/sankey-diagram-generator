@@ -92,29 +92,34 @@ if uploaded_file is not None:
                         temperature=temperature
                     )
                     
-                    # Store data safely for visualization in Phase 4
+                    # Store data safely for visualization
                     st.session_state['sankey_data'] = sankey_data
                     st.success("Successfully isolated financial flow layers!")
-
-           
-                    st.markdown("---")
-                    st.subheader("Interactive Visualization")
-                    
-                    # Generate and render the Plotly object
-                    fig = generate_sankey_chart(sankey_data)
-                    st.plotly_chart(fig, use_container_width=True)
-                    # -------------------------------
-                    
-                    with st.expander("View Raw Structural Blueprint JSON"):
-                        st.json(sankey_data)
-                    
                 except Exception as error:
-                    st.error(f"Execution pipeline halted: {str(error)}")
+                    st.error("Execution pipeline stopped: {str(error)}")
+
+        if 'sankey_data' in st.session_state:
                     
-    else:
-        st.error("Document appears to be empty or unreadable.")
-else:
-    st.info("Awaiting file upload to initiate extraction pipeline.")  
+            st.markdown("---")
+            st.subheader("Interactive Visualization")
+
+            try:
+                  
+                # Generate and render the Plotly object
+                fig = generate_sankey_chart(st.session_state['sankey_data'])
+                st.plotly_chart(fig, use_container_width=True)
+                # -------------------------------
+                    
+                with st.expander("View Raw Structural Blueprint JSON"):
+                        st.json(st.session_state['sankey_data'])
+                    
+            except Exception as error:
+                st.error(f"Visualization rendering failed: {str(error)}")
+                    
+        else:
+            st.info("👆 Upload a document and click **Generate Structured Flow Blueprint** to start the analysis.")
+# else:
+#     st.info("Awaiting file upload to initiate extraction pipeline.")  
 
 # Placeholder Execution Pipeline Verification
 if uploaded_file is not None:
