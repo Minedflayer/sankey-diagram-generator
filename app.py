@@ -60,10 +60,9 @@ if uploaded_file is not None:
         else:
             # Handles standard text file format
             raw_text = uploaded_file.read().decode("utf-8")
-        # 2. Run cleaning rules
+        # Run cleaning rules
         cleaned_text = clean_extracted_text(raw_text)
         
-# app.py (Continued below the file metrics and expander layout)
 
     if cleaned_text:
         st.success(f"Successfully processed: {uploaded_file.name}")
@@ -91,10 +90,9 @@ if uploaded_file is not None:
                     sankey_data = extract_data(
                         text=st.session_state['document_text'],
                         model_name=selected_model,
-                       # temperature=temperature
                     )
                     
-                    # Store data safely for visualization in Phase 4
+                    # Store data safely for visualization
                     st.session_state['sankey_data'] = sankey_data
                     st.success("Successfully isolated financial flow layers!")
 
@@ -129,5 +127,3 @@ if uploaded_file is not None:
         "FileSize": f"{uploaded_file.size / 1024:.2f} KB"
     }
     st.json(file_details)
-else:
-    st.info("Awaiting file upload to initiate extraction pipeline.")

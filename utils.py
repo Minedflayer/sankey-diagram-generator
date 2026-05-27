@@ -15,7 +15,7 @@ def get_groq_client():
 
 def extract_text_from_pdf(file_wrapper) -> str:
     """ Extracts raw text from an uploaded PDF file object using PyMuPDF. """
-    # Reset the stream position in case it was read elsewhere in the app
+    # Uses the seek() function to reset the stream position in case it was read elsewhere in the app
     file_wrapper.seek(0)
     file_bytes = file_wrapper.read()
     
@@ -38,7 +38,7 @@ def clean_extracted_text(text: str) -> str:
     text = re.sub(r'[ \t]+', ' ', text)
     return text.strip()
 
-def extract_data(text: str, model_name: str, temperature: float) -> dict:
+def extract_data(text: str, model_name: str) -> dict:
     """
     Forces the LLM to extract data into a STRICT predefined accounting skeleton,
     and explicitly forbids unit conversion to prevent zero-dropping hallucinations.
@@ -52,7 +52,6 @@ def extract_data(text: str, model_name: str, temperature: float) -> dict:
                 {"role": "user", "content": f"Extract the Income Statement hierarchy from this text using the strict accounting skeleton provided:\n\n{text}"}
             ],
             model=model_name,
-            temperature=0.0, # Zero creativity, pure data extraction
             max_tokens=8000,
             response_format={"type": "json_object"}
         )
@@ -65,7 +64,6 @@ def extract_data(text: str, model_name: str, temperature: float) -> dict:
         raise Exception(f"Extraction failed: {str(e)}")
     
     # --- Rendering Helper Functions --
-
 def _clean_financial_value(val) -> float:
     """Standardizes numeric extraction logic."""
     return float(str(val).replace(",", "").replace("$", ""))
@@ -202,23 +200,24 @@ def _build_sankey_figure(clean_links: list, node_tiers: dict) -> go.Figure:
             else:
                 node_y[idx] = 0.1 + (i / (num_nodes - 1)) * 0.8
 
-    # Semantic & Structural Color Engine
+# 5. Semantic & Structural Color Engine (Premium Financial Palette)
     node_colors = []
     for name in list_of_nodes:
+        # Strip tags so the color engine can read the pure words
         clean_name = name.replace(" [IN]", "").replace(" [OUT]", "").lower()
         tier = node_tiers[name]
         
         if tier < 0:
-            node_colors.append("#808080")
+            node_colors.append("#94a3b8") # Slate Grey for incoming revenues
         elif tier == 0:
-            node_colors.append("#404040")
+            node_colors.append("#2d3748") # Deep Charcoal for Total Revenue Hub
         elif tier > 0:
+            # If it's on the right side, it's either a Profit or a Cost
             if any(k in clean_name for k in ["profit", "income", "net", "margin"]):
-                node_colors.append("#2ca02c")
+                node_colors.append("#1b8a5a") # Premium Emerald Green
             else:
-                node_colors.append("#d62728")
+                node_colors.append("#bc3c3c") # Premium Muted Red for expenses
 
-    # Mapping sources and targets
     sources, targets, values, link_colors = [], [], [], []
     for link in clean_links:
         sources.append(node_mapping[link["source"]])
@@ -228,13 +227,14 @@ def _build_sankey_figure(clean_links: list, node_tiers: dict) -> go.Figure:
         target_tier = node_tiers[link["target"]]
         
         if target_tier <= 0:
-            link_colors.append("rgba(128, 128, 128, 0.3)")
+            # Using strict, space-free rgba formatting
+            link_colors.append("rgba(148,163,184,0.25)") 
         else:
             clean_target = link["target"].replace(" [IN]", "").replace(" [OUT]", "").lower()
             if any(k in clean_target for k in ["profit", "income", "net", "margin"]):
-                link_colors.append("rgba(44, 160, 44, 0.3)")
+                link_colors.append("rgba(27,138,90,0.25)") 
             else:
-                link_colors.append("rgba(214, 39, 40, 0.3)")
+                link_colors.append("rgba(188,60,60,0.25)")
 
     # Build the Plotly Object
     fig = go.Figure(data=[go.Sankey(
