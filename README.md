@@ -7,6 +7,9 @@
 
 An intelligent web application built with Streamlit that automates the extraction of complex financial hierarchies from raw PDFs (like Income Statements and 10-K reports). By leveraging the speed of the Groq API, it parses unstructured text into strict JSON schemas and renders them dynamically as interactive Plotly Sankey diagrams.
 
+- Try the application here: https://sankey-diagram-generator-vu6u4kbqhvs5vfqe2amqxa.streamlit.app/
+- Not working? Clone the project and use your own API key. Instructions can be found below.
+
 ## Features
 
 - **Intelligent PDF Parsing:** Utilizes `PyMuPDF` to extract raw text while preserving tabular structures.
@@ -24,7 +27,7 @@ The application pipeline operates in three distinct phases:
 ## Prerequisites
 
 - **Node.js / Python:** Python 3.10 or higher.
-- **API Keys:** A valid [Groq API Key](https://console.groq.com/keys) for LLM access.
+- **API Keys:** A valid [Groq API Key](https://console.groq.com/keys) for LLM access. Sign up for free here: https://groq.com/
 
 ## Getting Started
 
